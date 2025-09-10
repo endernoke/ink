@@ -320,3 +320,41 @@ test.serial('useStdout - write to stdout', async t => {
 // how to test useStderr() hook. child_process.spawn() can't be used, because
 // Ink fails with "raw mode unsupported" error.
 test.todo('useStderr - write to stderr');
+
+test.serial('useRenderEffect - called after rerender', async t => {
+	const ps = term('use-render-effect-basic');
+	await ps.waitForExit();
+
+	const lines = stripAnsi(ps.output).split('\r\n');
+
+	// Should see the render effect calls in the output
+	t.true(lines.some(line => line.includes('useRenderEffect called: count 1')));
+	t.true(lines.some(line => line.includes('useRenderEffect called: count 2')));
+	t.true(lines.some(line => line.includes('useRenderEffect called: count 3')));
+	t.true(ps.output.includes('exited'));
+});
+
+test.serial('useRenderEffect - respects dependency array', async t => {
+	const ps = term('use-render-effect-deps');
+	await ps.waitForExit();
+
+	const lines = stripAnsi(ps.output).split('\r\n');
+
+	// Should only see effect calls when deps change
+	t.true(lines.some(line => line.includes('useRenderEffect with deps: 1')));
+	t.true(lines.some(line => line.includes('useRenderEffect with deps: 2')));
+	t.false(lines.some(line => line.includes('useRenderEffect with deps: 3')));
+	t.true(ps.output.includes('exited'));
+});
+
+test.serial('useRenderEffect - called after terminal repaint', async t => {
+	const ps = term('use-render-effect-repaint');
+	await ps.waitForExit();
+
+	const {output} = ps;
+
+	// Should see evidence that the effect ran after terminal was painted
+	// The effect modifies the output using ANSI escape sequences
+	t.true(output.includes('MODIFIED BY EFFECT'));
+	t.true(output.includes('exited'));
+});
