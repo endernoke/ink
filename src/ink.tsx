@@ -17,6 +17,7 @@ import logUpdate, {type LogUpdate} from './log-update.js';
 import instances from './instances.js';
 import App from './components/App.js';
 import {accessibilityContext as AccessibilityContext} from './components/AccessibilityContext.js';
+import {InkContext} from './components/InkContext.js';
 
 const noop = () => {};
 
@@ -50,6 +51,8 @@ export default class Ink {
 	private exitPromise?: Promise<void>;
 	private restoreConsole?: () => void;
 	private readonly unsubscribeResize?: () => void;
+	// Queue for callbacks that should run after a render is painted to the terminal
+	private readonly renderEffects: Array<() => void> = [];
 
 	constructor(options: Options) {
 		autoBind(this);
@@ -179,6 +182,7 @@ export default class Ink {
 			}
 
 			this.options.stdout.write(this.fullStaticOutput + output);
+			this.executeRenderEffects();
 			return;
 		}
 
@@ -189,6 +193,7 @@ export default class Ink {
 
 			this.lastOutput = output;
 			this.lastOutputHeight = outputHeight;
+			this.executeRenderEffects();
 			return;
 		}
 
@@ -205,6 +210,7 @@ export default class Ink {
 			}
 
 			if (output === this.lastOutput && !hasStaticOutput) {
+				this.executeRenderEffects();
 				return;
 			}
 
@@ -229,6 +235,7 @@ export default class Ink {
 			this.lastOutput = output;
 			this.lastOutputHeight =
 				wrappedOutput === '' ? 0 : wrappedOutput.split('\n').length;
+			this.executeRenderEffects();
 			return;
 		}
 
@@ -243,6 +250,7 @@ export default class Ink {
 			this.lastOutput = output;
 			this.lastOutputHeight = outputHeight;
 			this.log.sync(output);
+			this.executeRenderEffects();
 			return;
 		}
 
@@ -259,25 +267,28 @@ export default class Ink {
 
 		this.lastOutput = output;
 		this.lastOutputHeight = outputHeight;
+		this.executeRenderEffects();
 	};
 
 	render(node: ReactNode): void {
 		const tree = (
-			<AccessibilityContext.Provider
-				value={{isScreenReaderEnabled: this.isScreenReaderEnabled}}
-			>
-				<App
-					stdin={this.options.stdin}
-					stdout={this.options.stdout}
-					stderr={this.options.stderr}
-					writeToStdout={this.writeToStdout}
-					writeToStderr={this.writeToStderr}
-					exitOnCtrlC={this.options.exitOnCtrlC}
-					onExit={this.unmount}
+			<InkContext.Provider value={this}>
+				<AccessibilityContext.Provider
+					value={{isScreenReaderEnabled: this.isScreenReaderEnabled}}
 				>
-					{node}
-				</App>
-			</AccessibilityContext.Provider>
+					<App
+						stdin={this.options.stdin}
+						stdout={this.options.stdout}
+						stderr={this.options.stderr}
+						writeToStdout={this.writeToStdout}
+						writeToStderr={this.writeToStderr}
+						exitOnCtrlC={this.options.exitOnCtrlC}
+						onExit={this.unmount}
+					>
+						{node}
+					</App>
+				</AccessibilityContext.Provider>
+			</InkContext.Provider>
 		);
 
 		// @ts-expect-error the types for `react-reconciler` are not up to date with the library.
@@ -405,5 +416,29 @@ export default class Ink {
 				}
 			}
 		});
+	}
+
+	/**
+	 * Schedule a callback to run after the next render is painted to the terminal.
+	 * This is used by the useRenderEffect hook.
+	 */
+	scheduleRenderEffect(callback: () => void): void {
+		this.renderEffects.push(callback);
+	}
+
+	/**
+	 * Execute all scheduled render effects and clear the queue.
+	 * This is called after the output is written to the terminal.
+	 */
+	private executeRenderEffects(): void {
+		const effects = this.renderEffects.splice(0);
+		for (const effect of effects) {
+			try {
+				effect();
+			} catch (error) {
+				// Log errors but don't let them break the render cycle
+				console.error('Error in render effect:', error);
+			}
+		}
 	}
 }
